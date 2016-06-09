@@ -12,7 +12,8 @@ import XCTest
 class ResponseTests: XCTestCase {
     static var allTests: [(String, (ResponseTests) -> () throws -> Void)] {
         return [
-           ("testRedirect", testRedirect)
+           ("testRedirect", testRedirect),
+           ("testCookiesSerialization", testCookiesSerialization)
         ]
     }
 
@@ -20,7 +21,17 @@ class ResponseTests: XCTestCase {
         let url = "http://tanner.xyz"
 
         let redirect = Response(redirect: url)
-        XCTAssert(redirect.headers["location"].first == url, "Location header should be in headers")
+        XCTAssert(redirect.headers["location"] == url, "Location header should be in headers")
+    }
+
+    func testCookiesSerialization() {
+        var cookies: Cookies = []
+        cookies["key"] = "val"
+
+        let data = cookies.serialize()
+
+        let expected = "key=val"
+        XCTAssert(data == expected.data, "Cookies did not serialize")
     }
 
 }

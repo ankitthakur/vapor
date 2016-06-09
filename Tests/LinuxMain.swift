@@ -6,6 +6,7 @@ import XCTest
 XCTMain([
     testCase(ApplicationTests.allTests),
     testCase(ConfigTests.allTests),
+    testCase(ConsoleTests.allTests),
     testCase(ControllerTests.allTests),
     testCase(EnvironmentTests.allTests),
     testCase(EventTests.allTests),
@@ -14,7 +15,6 @@ XCTMain([
     testCase(LocalizationTests.allTests),
     testCase(LogTests.allTests),
     testCase(MemorySessionDriverTests.allTests),
-    testCase(PerformanceTests.allTests),
     testCase(ProcessTests.allTests),
     testCase(ResponseTests.allTests),
     testCase(RequestTests.allTests),
@@ -22,10 +22,13 @@ XCTMain([
     testCase(RouteTests.allTests),
     testCase(SessionTests.allTests),
     testCase(TypedRouteTests.allTests),
+    testCase(UnsignedIntegerChunkingTests.allTests),
     testCase(ValidationConvenienceTests.allTests),
     testCase(ValidationCountTests.allTests),
     testCase(ValidationTests.allTests),
     testCase(ValidationUniqueTests.allTests),
+    testCase(WebSocketSerializationTests.allTests),
+    testCase(WebSocketKeyTests.allTests),
 ])
 
 #endif

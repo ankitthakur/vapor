@@ -1,7 +1,9 @@
 import libc
 import MediaType
+import Foundation
+import Socks
 
-public let VERSION = "0.9.1"
+public let VERSION = "0.11"
 
 public class Application {
     /**
@@ -9,13 +11,14 @@ public class Application {
         for returning registered `Route` handlers
         for a given request.
     */
-    public var router: RouterDriver
+    public let router: RouterDriver
 
     /**
-        When starting the application, the server will attempt to be initialized
-        from the given type
+        The server that will accept requesting
+        connections and return the desired
+        response.
     */
-    public var serverType: Server.Type
+    public let server: ServerDriver.Type
 
     /**
         The session driver is responsible for
@@ -80,10 +83,16 @@ public class Application {
     public var globalMiddleware: [Middleware]
 
     /**
-        Provider classes that have been registered
-        with this application
-     */
-    public var providers: [Provider]
+        Available Commands to use when starting
+        the application.
+    */
+    public var commands: [Command.Type]
+
+    /**
+        Send output and receive input from the console
+        using the underlying `ConsoleDriver`.
+    */
+    public let console: Console
 
     /**
         Resources directory relative to workDir
@@ -92,46 +101,104 @@ public class Application {
         return workDir + "Resources/"
     }
 
-    var routes: [Route] = []
+    /**
+        The arguments passed to the application.
+    */
+    public let arguments: [String]
+
+    var routes: [Route]
 
     /**
         Initialize the Application.
     */
     public init(
-        workDir overrideWorkDir: String? = nil,
-        sessionDriver: SessionDriver? = nil,
-        config overrideConfig: Config? = nil,
-        localization overrideLocalization: Localization? = nil,
-        hash: Hash = Hash(),
-        server: Server.Type = HTTPStreamServer<ServerSocket>.self,
-        router: RouterDriver = BranchRouter()
+        workDir: String? = nil,
+        config: Config? = nil,
+        localization: Localization? = nil,
+        hash: HashDriver? = nil,
+        console: ConsoleDriver? = nil,
+        server: ServerDriver.Type? = nil,
+        router: RouterDriver? = nil,
+        session: SessionDriver? = nil,
+        providers: [Provider] = [],
+        arguments: [String]? = nil
     ) {
-        self.hash = hash
-        self.session = sessionDriver ?? MemorySessionDriver(hash: hash)
-        self.providers = []
+        var serverProvided: ServerDriver.Type? = server
+        var routerProvided: RouterDriver? = router
+        var sessionProvided: SessionDriver? = session
+        var hashProvided: HashDriver? = hash
+        var consoleProvided: ConsoleDriver? = console
 
-        let workDir = overrideWorkDir
-            ?? Process.valueFor(argument: "workDir")
+        for provider in providers {
+            serverProvided = provider.server ?? serverProvided
+            routerProvided = provider.router ?? routerProvided
+            sessionProvided = provider.session ?? sessionProvided
+            hashProvided = provider.hash ?? hashProvided
+            consoleProvided = provider.console ?? consoleProvided
+        }
+
+        let arguments = arguments ?? NSProcessInfo.processInfo().arguments
+        self.arguments = arguments
+
+        let workDir = workDir
+            ?? arguments.value(for: "workdir")
+            ?? arguments.value(for: "workDir")
             ?? "./"
         self.workDir = workDir.finish("/")
 
-        let localization = overrideLocalization ?? Localization(workingDirectory: workDir)
+        let localization = localization ?? Localization(workingDirectory: workDir)
         self.localization = localization
 
-        let config = overrideConfig ?? Config(workingDirectory: workDir)
+        let config = config ?? Config(workingDirectory: workDir, arguments: arguments)
         self.config = config
-        self.host = config["app", "host"].string ?? "0.0.0.0"
-        self.port = config["app", "port"].int ?? 80
+
+        let host = config["app", "host"].string ?? "0.0.0.0"
+        let port = config["app", "port"].int ?? 8080
+        self.host = host
+        self.port = port
+
+        let key = config["app", "key"].string
+        let hash = Hash(key: key, driver: hashProvided)
+        self.hash = hash
+
+        let session = sessionProvided ?? MemorySessionDriver(hash: hash)
+        self.session = session
 
         self.globalMiddleware = [
+            CookiesMiddleware(),
+            JSONMiddleware(),
+            FormURLEncodedMiddleware(),
+            MultipartMiddleware(),
+            ContentMiddleware(),
             AbortMiddleware(),
             ValidationMiddleware(),
             SessionMiddleware(session: session)
         ]
 
-        self.router = router
-        self.serverType = server
+        self.router = routerProvided ?? BranchRouter()
+        self.server = serverProvided ?? StreamServer<
+            SynchronousTCPServer,
+            HTTPParser,
+            HTTPSerializer
+        >.self
+
+        routes = []
+
+        commands = []
+
+        let console = Console(driver: consoleProvided ?? Terminal())
+        self.console = console
+
+        Log.driver = ConsoleLogger(console: console)
+
+        commands.append(Help.self)
+        commands.append(Serve.self)
+
         restrictLogging(for: config.environment)
+
+        for provider in providers {
+            provider.boot(with: self)
+        }
     }
 
     private func restrictLogging(for environment: Environment) {
@@ -142,34 +209,102 @@ public class Application {
 }
 
 extension Application {
+    enum ExecutionError: ErrorProtocol {
+        case insufficientArguments, noCommandFound
+    }
+
     /**
-        Boots the chosen server driver and
-        optionally runs on the supplied
-        ip & port overrides
+        Starts console
     */
+    @noreturn
     public func start() {
-        bootProviders()
-        bootRoutes()
-
-        // no return - code beyond this call will only execute in event of failure
-        startServer()
-    }
-
-    func bootProviders() {
-        for provider in self.providers {
-            provider.boot(with: self)
-        }
-    }
-
-    func bootRoutes() {
-        routes.forEach(router.register)
-    }
-
-    private func startServer() {
         do {
-            Log.info("Server starting ...")
-            let server = try serverType.init(host: host, port: port, responder: self)
+            try execute()
+            exit(0)
+        } catch let error as ExecutionError {
+            switch error {
+            case .insufficientArguments:
+                console.output("Insufficient arguments.", style: .error)
+            case .noCommandFound:
+                console.output("Command not recognized. Run 'help' for a list of available commands.", style: .error)
+            }
+        } catch let error as CommandError {
+            switch error {
+            case .insufficientArguments:
+                console.output("Insufficient arguments.", style: .error)
+            case .invalidArgument(let name):
+                console.output("Invalid argument name '\(name)'.", style: .error)
+            case .custom(let error):
+                console.output(error)
+            }
+        } catch  {
+            console.output("Error: \(error)", style: .error)
+        }
+        exit(1)
+    }
+
+    func execute() throws {
+        // options prefixed w/ `--` are accessible through `app.config["app", "argument"]`
+        var iterator = self.arguments.filter { item in
+            return !item.hasPrefix("--")
+        }.makeIterator()
+
+        _ = iterator.next() // pop location arg
+
+        let commandId: String
+        if let next = iterator.next() {
+            commandId = next
+        } else {
+            commandId = "serve"
+            console.output("No command supplied, defaulting to 'serve'.", style: .warning)
+        }
+
+        let arguments = Array(iterator)
+
+        for commandType in commands {
+            if commandType.id == commandId {
+                let command = commandType.init(app: self)
+                
+                let requiredArguments = command.dynamicType.signature.filter { signature in
+                    return signature is Argument
+                }
+
+                if arguments.count < requiredArguments.count {
+                    let signature = command.dynamicType.signature()
+                    console.output(signature)
+                    throw ExecutionError.insufficientArguments
+                }
+
+                try command.run()
+                return
+            }
+        }
+
+        throw ExecutionError.noCommandFound
+    }
+}
+
+extension Sequence where Iterator.Element == String {
+    func value(for string: String) -> String? {
+        for item in self {
+            let search = "--\(string)="
+            if item.hasPrefix(search) {
+                var item = item
+                item.replace(string: search, with: "")
+                return item
+            }
+        }
+
+        return nil
+    }
+}
+
+extension Application {
+    internal func serve() {
+        do {
+            Log.info("Server starting at \(host):\(port)")
             // noreturn
+            let server = try self.server.init(host: host, port: port, responder: self)
             try server.start()
         } catch {
             Log.error("Server start error: \(error)")
@@ -195,7 +330,7 @@ extension Application {
                     let fileExtension = filePath.components(separatedBy: ".").last,
                     let type = mediaType(forFileExtension: fileExtension)
                 {
-                    headers["Content-Type"] = Response.Headers.Values(type.description)
+                    headers["Content-Type"] = type.description
                 }
 
                 return Response(status: .ok, headers: headers, body: Data(fileBody))
@@ -235,8 +370,6 @@ extension Application: Responder {
         var responder: Responder
         var request = request
 
-        request.cacheParsedContent()
-
         // Check in routes
         if let (parameters, routerHandler) = router.route(request) {
             request.parameters = parameters
@@ -251,7 +384,7 @@ extension Application: Responder {
         }
 
         // Loop through middlewares in order
-        for middleware in self.globalMiddleware {
+        for middleware in self.globalMiddleware.reversed() {
             responder = middleware.chain(to: responder)
         }
 
@@ -259,7 +392,7 @@ extension Application: Responder {
         do {
             response = try responder.respond(to: request)
 
-            if response.headers["Content-Type"].first == nil {
+            if response.headers["Content-Type"] == nil {
                 Log.warning("Response had no 'Content-Type' header.")
             }
         } catch {
@@ -271,8 +404,8 @@ extension Application: Responder {
             response = Response(error: error)
         }
 
-        response.headers["Date"] = Response.Headers.Values(Response.date)
-        response.headers["Server"] = Response.Headers.Values("Vapor \(Vapor.VERSION)")
+        response.headers["Date"] = Response.date
+        response.headers["Server"] = "Vapor \(Vapor.VERSION)"
 
         return response
     }

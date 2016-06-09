@@ -1,8 +1,8 @@
 import Foundation
 
-extension Process {
-    static func makeCLIConfig() -> JSONDirectory {
-        let configArgs = NSProcessInfo.processInfo().arguments.filter { $0.hasPrefix("--") }
+extension Config {
+    static func makeCLIConfig(arguments: [String]) -> JSONDirectory {
+        let configArgs = arguments.filter { $0.hasPrefix("--") }
 
         // [FileName: Json]
         var directory: [String: JSON] = [:]
@@ -34,12 +34,15 @@ extension Process {
                    omittingEmptySubsequences: true)
             .map(String.init)
 
-        guard info.count == 2, let key = info.first, let value = info.last else {
+        if info.count == 1, let key = info.first {
+            // Keys like --release default to `release = true`
+            return (key, "true")
+        } else if info.count == 2, let key = info.first, let value = info.last {
+            return (key, value)
+        } else {
             Log.info("Unable to parse possible config argument: \(arg)")
             return nil
         }
-
-        return (key, value)
     }
 
     static func parseConfigKey(_ key: String) -> (file: String, path: [PathIndex])? {

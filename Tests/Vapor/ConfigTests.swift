@@ -38,18 +38,29 @@ class ConfigTests: XCTestCase {
 	}
 
     func testConfigKeys() {
-        guard let (complexFile, complexPath) = Process.parseConfigKey("--config:file.path.to.value") else {
+        guard let (complexFile, complexPath) = Config.parseConfigKey("--config:file.path.to.value") else {
             XCTFail("Couldn't extract complex cli config")
             return
         }
         XCTAssert(complexFile == "file")
         XCTAssert(complexPath.map { "\($0)" } == ["path", "to", "value"])
 
-        guard let (simpleFile, simplePath) = Process.parseConfigKey("--some-key") else {
+        guard let (simpleFile, simplePath) = Config.parseConfigKey("--some-key") else {
             XCTFail("Couldn't extract simple cli config")
             return
         }
         XCTAssert(simpleFile == "app")
         XCTAssert(simplePath.map { "\($0)" } == ["some-key"])
+    }
+
+    func testConfigParsing() {
+        // If a flag has leading `--` and no `=`, it's implicitly `true`
+        guard let (key, value) = Config.parseArgument("--release") else {
+            XCTFail("Couldn't parse boolean key")
+            return
+        }
+
+        XCTAssert(key == "--release")
+        XCTAssert(value == "true")
     }
 }

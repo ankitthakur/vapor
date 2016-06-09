@@ -99,8 +99,6 @@ class RouterTests: XCTestCase {
         let route = Route(method: .get, path: "test/:string") { request in
 
             let testParameter = request.parameters["string"]
-            print(request.parameters)
-            print("hi")
 
             XCTAssert(testParameter == decodedString, "URL parameter was not decoded properly")
 
@@ -118,7 +116,7 @@ class RouterTests: XCTestCase {
 
         do {
             request.parameters = handler.parameters
-            try handler.handler.respond(to: request)
+            let _ = try handler.handler.respond(to: request)
         } catch {
             XCTFail("Handler threw error \(error)")
         }
